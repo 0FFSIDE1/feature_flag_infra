@@ -27,7 +27,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install .[dev]
           
-    #   - name: Run tests
-    #     run: |
-    #       pytest -m "not integration"
+      - name: Run tests
+        run: |
+          pytest --cov=feature_flag_infra --cov-report=xml
     
