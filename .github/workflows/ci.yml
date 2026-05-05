@@ -1,4 +1,4 @@
-name: Payment_infra CI
+name: Feature_flag_infra CI
 
 on:
   push:
