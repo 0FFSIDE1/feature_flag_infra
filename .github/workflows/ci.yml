@@ -29,5 +29,5 @@ jobs:
           
       - name: Run tests
         run: |
-          pytest --cov=feature_flag_infra --cov-report=xml
+          pytest
     
