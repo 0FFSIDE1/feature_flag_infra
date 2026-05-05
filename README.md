@@ -1,183 +1,335 @@
-feature-flag-infra
+# feature-flag-infra
 
-A lightweight, production-ready feature flag infrastructure for Python applications.
+`feature-flag-infra` is a reusable Python/Django feature flag infrastructure package for progressive delivery and controlled rollouts.
 
-Built for clean architecture, progressive rollout, and multi-project reuse.
+It is published as:
 
-Supports:
-
-Django (first-class)
-Any Python project (framework-agnostic)
-Pluggable providers (DB, Redis, API, etc.)
-Deterministic rollout (percentage-based)
-✨ Why this exists
-
-Most feature flag implementations are:
-
-tightly coupled to a framework
-hard to reuse across services
-missing rollout logic
-not test-friendly
-
-feature-flag-infra solves that by providing:
-
-a clean provider interface
-a central service layer
-reusable rollout logic
-optional Django integration
-📦 Installation
+```bash
 pip install feature-flag-infra
-🧠 Core Concept
+```
 
-Everything revolves around one abstraction:
+And imported as:
 
-FeatureFlagService -> FeatureFlagProvider
+```python
+import feature_flag_infra
+```
 
-You plug in your provider (DB, Redis, API), and the service handles usage.
+## Why this package exists
 
-🚀 Quick Start (Framework Agnostic)
-1. Create a provider
+Feature flags are useful in both web apps and background services, but many implementations are tightly coupled to one framework or one storage backend.
+
+This package provides a small, provider-driven core API that works:
+
+- in Django projects (with a built-in database provider and model)
+- in non-Django Python projects (by implementing your own provider)
+
+It is infrastructure code intended to be reused across projects, not a standalone Django project.
+
+## Features
+
+- Provider abstraction via `FeatureFlagProvider`
+- Core service API via `FeatureFlagService`
+- Deterministic percentage rollout helper (`is_user_in_rollout`)
+- Built-in Django integration:
+  - `FeatureFlag` model
+  - Django DB-backed provider (`DjangoDBFlagProvider`)
+  - convenience accessor (`get_feature_flags`)
+  - migration and management command (`register_feature`)
+- Built-in cache usage in Django provider (flag metadata cache)
+
+## Installation
+
+```bash
+pip install feature-flag-infra
+```
+
+> **Note:** This package has a Django dependency and is designed as a reusable library. Do not expect a `manage.py` inside this repository.
+
+## Quick start
+
+Use the framework-agnostic service API with a custom provider:
+
+```python
 from feature_flag_infra.interfaces import FeatureFlagProvider
+from feature_flag_infra.service import FeatureFlagService
 
 
 class InMemoryProvider(FeatureFlagProvider):
     def __init__(self):
         self.flags = {
-            "new_feature": True
+            "new_checkout": True,
+            "beta_search": False,
         }
 
     def is_enabled(self, flag, *, user=None, default=False):
         return self.flags.get(flag, default)
-2. Use the service
-from feature_flag_infra.service import FeatureFlagService
+
 
 flags = FeatureFlagService(provider=InMemoryProvider())
 
-if flags.enabled("new_feature"):
-    print("Feature is ON")
-⚙️ Django Integration
-1. Add to installed apps
+if flags.enabled("new_checkout"):
+    print("New checkout is enabled")
+```
+
+## Django usage
+
+### 1) `INSTALLED_APPS` setup
+
+Use the package app config:
+
+```python
 INSTALLED_APPS = [
-    ...
-    "feature_flag_infra.django",
+    # ...
+    "feature_flag_infra.django.apps.FeatureFlagInfraConfig",
 ]
-2. Run migrations
+```
+
+- App config path: `feature_flag_infra.django.apps.FeatureFlagInfraConfig`
+- App label: `feature_flag_infra`
+
+### 2) Migrations
+
+This package ships with migrations for the `FeatureFlag` model.
+
+Run:
+
+```bash
 python manage.py migrate
-3. Use in your code
-from feature_flag_infra.django import get_feature_flags
+```
+
+You do **not** need to generate migrations for this package yourself.
+
+### 3) Creating feature flags
+
+#### Option A: Django admin / ORM
+
+```python
+from feature_flag_infra.django.models import FeatureFlag
+
+FeatureFlag.objects.create(
+    name="new_invoice_flow",
+    enabled=True,
+    rollout_percentage=100,
+)
+```
+
+#### Option B: management command
+
+```bash
+python manage.py register_feature new_invoice_flow --enable --rollout 100
+```
+
+You can register multiple flags at once:
+
+```bash
+python manage.py register_feature flag_a flag_b --rollout 50
+```
+
+### 4) Using `get_feature_flags`
+
+```python
+from feature_flag_infra.django.service import get_feature_flags
 
 flags = get_feature_flags()
 
-if flags.enabled("anomaly_detection", user=request.user):
-    # new logic
+if flags.enabled("new_invoice_flow", user=request.user):
+    # gated behavior
     ...
-🗃️ Feature Flag Model (Django)
-FeatureFlag:
-- name (unique)
-- enabled (bool)
-- staff_only (bool)
-- rollout_percentage (0–100)
-🎯 Rollout Behavior
+```
 
-The library supports deterministic percentage rollout:
+### 5) Example usage in views/services
 
-user_id + flag_name → hash → bucket (0–99)
-Example
-rollout %	behavior
-0	nobody gets it
-50	~50% of users
-100	everyone
+```python
+# views.py
+from django.http import JsonResponse
+from feature_flag_infra.django.service import get_feature_flags
 
-This ensures:
 
-consistency (same user always gets same result)
-safe gradual rollout
-no randomness issues
-🔐 Staff-only Flags
-if obj.staff_only:
-    return user.is_staff
+def checkout_view(request):
+    flags = get_feature_flags()
 
-Use this for:
+    if flags.enabled("new_checkout", user=request.user):
+        return JsonResponse({"flow": "new"})
 
-internal testing
-admin-only features
-beta previews
-🧠 Caching
+    return JsonResponse({"flow": "legacy"})
+```
 
-Django provider uses caching:
+```python
+# services.py
+from feature_flag_infra.django.service import get_feature_flags
 
-CACHE_TTL = 30  # seconds
 
-This prevents repeated DB hits.
+def maybe_run_anomaly_detection(user):
+    flags = get_feature_flags()
 
-You can plug in:
+    if flags.enabled("anomaly_detection", user=user):
+        return "anomaly detection enabled"
 
-Redis
-Memcached
-local memory
-🧩 Extending Providers
+    return "anomaly detection disabled"
+```
 
-You can easily plug in your own provider.
+## Non-Django Python usage
 
-Example: Redis Provider
-class RedisFlagProvider(FeatureFlagProvider):
-    def __init__(self, redis_client):
-        self.redis = redis_client
+### `FeatureFlagProvider`
+
+`FeatureFlagProvider` is the interface your backend must implement:
+
+```python
+class FeatureFlagProvider:
+    def is_enabled(self, flag: str, *, user=None, default=False) -> bool:
+        ...
+```
+
+### Custom in-memory provider
+
+```python
+from feature_flag_infra.interfaces import FeatureFlagProvider
+
+
+class InMemoryProvider(FeatureFlagProvider):
+    def __init__(self, flags=None):
+        self.flags = flags or {}
 
     def is_enabled(self, flag, *, user=None, default=False):
-        value = self.redis.get(flag)
+        return self.flags.get(flag, default)
+```
 
-        if value is None:
-            return default
+### `FeatureFlagService` usage
 
-        return value == b"1"
-🧪 Testing
-class FakeProvider(FeatureFlagProvider):
+```python
+from feature_flag_infra.service import FeatureFlagService
+
+provider = InMemoryProvider({"feature_x": True})
+flags = FeatureFlagService(provider)
+
+assert flags.enabled("feature_x") is True
+assert flags.enabled("missing", default=False) is False
+```
+
+## Rollout behavior
+
+The Django provider evaluates in this order:
+
+1. If `staff_only=True`, only staff users receive the feature.
+2. If `enabled=False`, feature is off.
+3. If `rollout_percentage >= 100`, feature is on.
+4. If user is explicitly allowlisted in `FeatureFlag.users`, feature is on.
+5. If `rollout_percentage <= 0`, feature is off.
+6. Otherwise, deterministic rollout is applied by hashing `"{flag}:{user_id}"` into bucket `0..99`.
+
+### Enabled/disabled behavior
+
+- `enabled=False` always disables (except `staff_only` is checked first, which still requires staff).
+- `enabled=True` allows further checks (staff-only, allowlist, rollout).
+
+### `staff_only` behavior
+
+- `staff_only=True` returns `True` only when `user.is_staff` is truthy.
+- Anonymous or non-staff users get `False`.
+
+### Users allowlist behavior
+
+Implemented via `FeatureFlag.users` many-to-many relation to `AUTH_USER_MODEL`.
+
+- If a user is allowlisted, they get `True` even when `rollout_percentage=0`.
+- `staff_only=True` still takes precedence and can block non-staff allowlisted users.
+
+### `rollout_percentage` behavior
+
+- `0`: no rollout users are included.
+- `100`: all users are included.
+- `1-99`: deterministic partial rollout using stable hash bucketing.
+
+### Anonymous user behavior
+
+- Anonymous/no-user requests can only receive `True` from the Django provider when rollout is effectively 100% and other conditions allow it.
+- Anonymous users do not participate in percentage rollout because no user identifier is available.
+
+## Caching behavior
+
+`DjangoDBFlagProvider` caches flag metadata by key `feature_flag:{flag_name}` using Django cache.
+
+- Default TTL: `30` seconds (`CACHE_TTL = 30`)
+- Cached fields: `id`, `enabled`, `staff_only`, `rollout_percentage`
+- User allowlist checks are still evaluated per call (DB existence check for authenticated users)
+
+You can override TTL:
+
+```python
+from feature_flag_infra.django.providers import DjangoDBFlagProvider
+
+provider = DjangoDBFlagProvider(cache_ttl=10)
+```
+
+## Testing
+
+This repository uses `pytest` with `pytest-django`.
+
+Typical commands:
+
+```bash
+pytest
+pytest -q
+```
+
+The test suite covers model behavior, provider behavior (including caching and allowlist), and rollout determinism.
+
+## Package structure
+
+```text
+feature_flag_infra/
+├── interfaces.py                 # Provider interface
+├── service.py                    # FeatureFlagService
+├── rollout.py                    # Deterministic rollout helpers
+└── django/
+    ├── apps.py                   # Django AppConfig
+    ├── models.py                 # FeatureFlag model
+    ├── providers.py              # DjangoDBFlagProvider
+    ├── service.py                # get_feature_flags()
+    ├── management/commands/
+    │   └── register_feature.py   # Feature registration command
+    └── migrations/
+        └── 0001_initial.py
+```
+
+## Extending with custom providers
+
+To support other storage backends (Redis, remote API, config service), implement `FeatureFlagProvider` and inject it into `FeatureFlagService`.
+
+```python
+from feature_flag_infra.interfaces import FeatureFlagProvider
+from feature_flag_infra.service import FeatureFlagService
+
+
+class CustomProvider(FeatureFlagProvider):
     def is_enabled(self, flag, *, user=None, default=False):
-        return True
-flags = FeatureFlagService(FakeProvider())
+        # read from your backend
+        return default
 
-assert flags.enabled("anything") is True
-🧱 Design Principles
-Dependency Inversion (DIP) → provider-based architecture
-Deterministic rollout → safe progressive delivery
-Framework isolation → Django is optional
-Composable → plug into any system
-Testability first
-🔄 Real-world Usage
-Example: Safe feature release
-if flags.enabled("new_checkout_flow", user=request.user):
-    return NewCheckoutService.process(...)
-else:
-    return OldCheckoutService.process(...)
-Example: Anomaly Detection Toggle
-if flags.enabled("anomaly_detection", user=request.user):
-    run_detection()
-📌 Roadmap
- Redis provider (first-class)
- API provider (central flag service)
- CLI for flag management
- Admin dashboard improvements
- Metrics / exposure tracking
-🤝 Contributing
 
-PRs are welcome. Focus on:
+flags = FeatureFlagService(CustomProvider())
+```
 
-clean abstractions
-backward compatibility
-performance
-📄 License
+This keeps your application logic independent from storage details.
 
-MIT
+## Security and best practices
 
-🧠 Final Note
+- Treat feature flags as control-plane configuration: restrict who can modify them.
+- Use `staff_only` for internal rollouts and admin-safe experiments.
+- Prefer gradual rollout (`rollout_percentage`) over instant global enablement.
+- Keep flag names stable and descriptive (e.g., `new_checkout_v2`).
+- Audit and retire stale flags to reduce long-term branching complexity.
 
-This library is intentionally minimal but powerful.
+## Roadmap
 
-It gives you:
+Potential future enhancements (not currently implemented in core package):
 
-control over rollout
-clean architecture
-portability across services
+- First-class Redis provider implementation
+- Central API-backed provider
+- CLI improvements for bulk operations
+- Optional admin UX enhancements
+- Exposure/metrics hooks
 
-Without locking you into a specific ecosystem.
+## License
+
+MIT License. See [LICENSE](LICENSE).
